@@ -10,7 +10,7 @@ Docker, Kubernetes, CI/CD, Monitoring 환경으로 확장하는 프로젝트입�
 
 ## Phase 1
 
-- WEB: Nginx
+- WEB: Apache
 - WAS: Spring Boot
 - DB: MySQL
 - OS: Ubuntu 24.04
