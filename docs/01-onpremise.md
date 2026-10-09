@@ -11,15 +11,16 @@
 - IP       : **192.168.111.141**
 - OS       : **Ubuntu 24.04**
 
-### Nginx 설치 전 확인
+### hostname 설정
+ 1. hostname web01로 만들기
+ 2. sudo hostname 확인
+ 3. sudo hostnamectl set-hostname web01
 
-- **hostname** : 웹 서버를 식별하기 위해 `web01`로 호스트 이름 변경
-- **ip addr** : 서버에 설정된 IP 주소 확인
-- **ip route** : 서버의 게이트웨이 및 라우팅 상태 확인
-- **timedatectl** : 서버 로그 시간의 일관성 유지 확인
-- **free -h** : 메모리 사용량 확인
-- **df -h** : 디스크 사용량 확인
-
+### timedatectl 설정
+  1. timedatectl로 local time 확인
+  2. sudo timedatectl set-timezone Asia/Seoul 로 Local time 변경
+  3. 장애 로그 시간을 맞추기 위해 해야한다.
+  
 ### Nginx 설치
 
 1. **Apache 대신 Nginx를 선택한 이유** :
@@ -68,3 +69,99 @@
    * **확인 방법** : `time sudo nginx -t` 명령어로 측정 시 약 15초 뒤에 결과 출력
    * **원인** : 초기 서버 설정 시 호스트 이름(hostname)을 변경했으나, `/etc/hosts` 파일 내부의 이름이 동기화되지 않아 이름 조회(DNS/Local resolution) 과정에서 지연 발생
    * **해결 방법** : 서버의 호스트 이름을 변경했다면 `/etc/hosts` 파일도 함께 확인하여 일치하도록 수정해야 합니다.
+
+
+# 온프레미스 3티어 구축 
+
+## 목적 
+온프레미스 환경에서 3티어 아키텍처를 구축해 본다.
+  
+## 2. WAS 서버
+
+### 서버 정보
+
+- Hostname : **was01**
+- IP       : **192.168.111.142** *(예시)*
+- OS       : **Ubuntu 24.04**
+
+### WAS 서버 사전 설정
+
+1. **Hostname 설정** :
+   * 웹 서버와 구분하기 위해 호스트 이름을 `was01`로 설정합니다.
+   * 현재 설정된 호스트 이름 확인 : `hostname`
+   * 호스트 이름 변경 : `sudo hostnamectl set-hostname was01`
+
+2. **시간 동기화 설정 (`timedatectl`)** :
+   * 현재 시간대 확인 : `timedatectl`
+   * 타임존을 서울로 변경 : `sudo timedatectl set-timezone Asia/Seoul`
+   * **이유** : 장애 발생 시 시스템 로그와 애플리케이션 로그의 시간 기준을 일치시켜 정확한 원인 분석을 하기 위함입니다.
+
+### Java (JDK 21) 설치
+
+1. **패키지 목록 업데이트** : `sudo apt update`
+2. **OpenJDK 21 설치** : `sudo apt install openjdk-21-jdk -y`
+3. **버전 확인 및 역할** :
+   * `java -version` : 자바로 작성된 컴파일된 프로그램(런타임 환경)을 실행합니다.
+   * `javac -version` : 자바 소스 코드를 바이트코드로 컴파일합니다.
+
+### 애플리케이션 전용 계정 생성
+
+1. **시스템 계정 생성** :
+   * 로그인 Shell이 필요 없고 홈 디렉터리가 `/opt/infra-app`인 시스템 전용 계정을 생성합니다.
+   * 명령어 : `sudo useradd --system --home /opt/infra-app --shell /usr/sbin/nologin infraapp`
+2. **계정 생성 확인** : `id infraapp`
+
+### 애플리케이션 및 로그 디렉터리 구조 생성
+
+1. **디렉터리 생성** :
+   * 애플리케이션 디렉터리 : `sudo mkdir -p /opt/infra-app`
+   * 로그 디렉터리 : `sudo mkdir -p /var/log/infra-app`
+2. **소유권 변경** :
+   * 생성한 디렉터리의 소유권을 `infraapp` 계정에 부여합니다.
+   * 명령어 : `sudo chown -R infraapp:infraapp /opt/infra-app`, `sudo chown -R infraapp:infraapp /var/log/infra-app`
+
+### Spring Boot JAR 배포 및 권한 설정
+
+1. **JAR 파일 이동** : 빌드된 `app.jar` 파일을 WAS 서버로 이동시킨 후 디렉터리로 이동시킵니다.
+   * 명령어 : `sudo mv app.jar /opt/infra-app/app.jar`
+2. **소유권 설정** : 
+   * 명령어 : `sudo chown infraapp:infraapp /opt/infra-app/app.jar`
+   * **이유** : 스프링 애플리케이션에 보안 취약점이나 장애가 발생하더라도 `root` 권한까지 탈취당하지 않도록 권한 범위를 최소 권한 원칙에 따라 제한하기 위함입니다.
+3. **배포 파일 확인** : `ls -lh /opt/infra-app/`
+4. **수동 실행 테스트** : `sudo -u infraapp java -jar /opt/infra-app/app.jar`
+
+### systemd 서비스 등록 및 자동 실행
+
+1. **systemd 서비스 파일 생성** : 
+   * 경로 : `/etc/systemd/system/infra-app.service` 파일을 생성하여 백그라운드 데몬으로 등록합니다.
+2. **systemd 데몬 리로드** : 수정된 서비스 파일을 시스템이 인식하도록 반영합니다.
+   * 명령어 : `sudo systemctl daemon-reload`
+3. **서비스 시작** : `sudo systemctl start infra-app`
+4. **서비스 상태 확인** : `sudo systemctl status infra-app`
+5. **프로세스 확인** : `ps -ef | grep app.jar`
+6. **헬스 체크 (HTTP 확인)** : `curl -i http://localhost:8080/health`
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
