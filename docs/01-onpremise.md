@@ -137,14 +137,67 @@
 6. **헬스 체크 (HTTP 확인)** : `curl -i http://localhost:8080/health`
 
 
-  
+
+## 3. DB 서버 
+
+### 서버 정보
+
+- Hostname : **db01**
+- IP       : **192.168.111.143**
+- OS       : **Ubuntu 24.04**
+
+### WAS 서버 사전 설정
+
+1. **Hostname 설정** :
+   * 웹 서버와 구분하기 위해 호스트 이름을 `was01`로 설정합니다.
+   * 현재 설정된 호스트 이름 확인 : `hostname`
+   * 호스트 이름 변경 : `sudo hostnamectl set-hostname db01`
+
+2. **시간 동기화 설정 (`timedatectl`)** :
+   * 현재 시간대 확인 : `timedatectl`
+   * 타임존을 서울로 변경 : `sudo timedatectl set-timezone Asia/Seoul`
+   * **이유** : 장애 발생 시 시스템 로그와 애플리케이션 로그의 시간 기준을 일치시켜 정확한 원인 분석을 하기 위함입니다.
+
+### MySQL 설치
+1. sudo apt update
+2. sudo apt install mysql-server -y
+3. mysql --version
+4. sudo systemctl status mysql
+5. systemctl is-enabled mysql
+
+### 애플리케이션 SQL 스크립트 Import
+1. DB01 서버로 SQL 스크립트를 로컬 PC에서 옮긴다.
+2. sudo mysql < db.sql 스크립트 Import
+
+### MySQL 원격 접속 설정
+1. was01 서버에서 mysql -h 192.168.111.143 -u marble -p
+2. was01에서 DB 포트까지 갈 수 있는지 테스트 : nc -zv 192.168.111.143 3306
+
+### WAS의 Spring Boot에 DB 정보 전달
+1. WAS01 서버에 DB 정보를 전달할 환경 설정 파일을 만든다. /etc/infra-app/infra-app.env
+2. 파일에 DB 정보를 넣는다.
+3. 최소한의 보안을 위해 소유권을 root로 바꾸고 root만 접근할 수 있게 한다.
+4. sudo chmod 600 /etc/infra-app/infra-app.env
+5. sudo chown root:root /etc/infra-app/infra-app.env
+
+### systemd가 환경설정을 읽게 함
+1. /etc/systemd/system/infra-app.service에 EnviromentFile=/etc/infra-app/infra-app.env 추가한다.
+2. sudo systemctl daemon-reload
+3. sudo systemctl restart infra-app
+
+### Spring, MySQL 연결 확인
+1. curl -i http://localhost:8080/health -> 200 OK
+2. curl -i http://localhost:8080/health/db  -> 200 OK
 
 
 
 
 
-
-
+### 트러블슈팅
+   **[이슈] was01 서버에서 dB01 서버로 MYSQL 원격 접속 설정 시 접속 거절 됨**  
+   * **확인 방법** : sudo ss -tnlp | grep :3306 해서 127.0.0.1:3306 로 결과가 나옴
+   * **원인** : bind-address = 127.0.0.1 로 설정
+   * **해결 방법** : /etc/mysql/mysql.conf.d/mysqld.conf에서 설정을 0.0.0.0 또는 DB IP 대역으로 열어줘야 한다. 
 
 
 
