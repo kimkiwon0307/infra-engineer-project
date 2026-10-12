@@ -24,8 +24,7 @@
 ### Nginx 설치
 
 1. **Apache 대신 Nginx를 선택한 이유** :
-   * Apache는 클라이언트 요청마다 독립된 프로세스나 스레드를 할당하는 방식을 사용합니다. 따라서 접속자가 많아지면 메모리와 CPU 사용량이 급격히 증가하며, 대규모 동시 접속 환경에서 병목 현상이 발생하기 쉽습니다.
-   * Nginx는 적은 수의 프로세스만 유지한 채 비동기 이벤트 기반으로 수많은 요청을 효율적으로 처리하므로, 대량의 동시 접속이 발생해도 일정한 메모리를 유지하며 안정적으로 작동합니다.
+   * Apache는 다양한 MPM 방식으로 요청을 처리하며 풍부한 모듈과 유연한 설정이 장점이고, Nginx는 이벤트 기반 구조를 사용하여 다수의 동시 연결을 효율적으로 처리하는 데 강점이 있다.
   
 2. **패키지 목록 업데이트** : `sudo apt update`
 3. **Nginx 설치** : `sudo apt install nginx -y`
@@ -63,13 +62,16 @@
 6. **검증** : 서비스 상태 확인, 80번 포트 LISTEN 확인, curl 정상 응답 확인, 웹 접속 확인
 7. **배운 점** : WEB 장애 발생 시 **[서비스 ➔ 프로세스 ➔ 포트 ➔ HTTP ➔ 로그]** 순서로 체계적으로 확인해야 합니다.
 
+### Reverse Proxy 
+
+
+
 ### 트러블슈팅
 
    **[이슈] `sudo nginx -t` 입력 시 응답이 지나치게 느린 현상**  
    * **확인 방법** : `time sudo nginx -t` 명령어로 측정 시 약 15초 뒤에 결과 출력
    * **원인** : 초기 서버 설정 시 호스트 이름(hostname)을 변경했으나, `/etc/hosts` 파일 내부의 이름이 동기화되지 않아 이름 조회(DNS/Local resolution) 과정에서 지연 발생
    * **해결 방법** : 서버의 호스트 이름을 변경했다면 `/etc/hosts` 파일도 함께 확인하여 일치하도록 수정해야 합니다.
-
   
 ## 2. WAS 서버
 
@@ -146,10 +148,10 @@
 - IP       : **192.168.111.143**
 - OS       : **Ubuntu 24.04**
 
-### WAS 서버 사전 설정
+### DB 서버 사전 설정
 
 1. **Hostname 설정** :
-   * 웹 서버와 구분하기 위해 호스트 이름을 `was01`로 설정합니다.
+   * WEB/WAS 서버와 구분하기 위해 호스트 이름을 `DB01`로 설정합니다.
    * 현재 설정된 호스트 이름 확인 : `hostname`
    * 호스트 이름 변경 : `sudo hostnamectl set-hostname db01`
 
@@ -189,9 +191,49 @@
 1. curl -i http://localhost:8080/health -> 200 OK
 2. curl -i http://localhost:8080/health/db  -> 200 OK
 
+### MySQL 로그 확인
+1. sudo tail -n 30 /var/log/mysql/error.log
 
+### DB 수동 백업
 
+### 백업 디렉터리 만들기
+1. sudo mkdir -p /backup/mysql
+2. sudo chown root:root /backup/mysql
+3. sudo chmod 700 /backup/mysql
+4. sudo ls -ld /backup/mysql
+5. 700으로 하는 이유는 DB 백업 파일에는 실제 서비스 데이터가 들어 있기 때문에 아무 사용자나 읽지 못하게 하기 위해서이다.
 
+### MySQL 백업 실행
+1. sudo sh -c 'mysqldump marble > /backup/mysql/marble_$(date +%Y%m%d_%H%M%S).sql'
+2. sudo ls -lh /backup/mysql
+
+### 백업 파일 복구 테스트
+1. 임시 데이터베이스를 만들어서.
+2. 위에 SQL을 임포트 한 후 테스트 한다.
+3. sudo sh -c 'mysql marble_restore < /backup/mysql/marble_20261012_181530.sql'
+
+### DB 자동 백업 스크립트
+1. #!/bin/bash    
+2. set -e   : 명령이 실패하면 스크립트를 멈춰라 
+3. BACKUP_DIR="/backup/mysql" = 백업 경로
+4. DB_NAME="marble"  : 백업할 DB이름을 변수 명에 저장
+5. DATE=$(date +%Y%m%d_%H%M%S) 
+6. mysqldump "$DB_NAME" > "$BACKUP_DIR/${DB_NAME}_${DATE}.sql"
+7. find "$BACKUP_DIR" -type f -name "${DB_NAME}_*.sql" -mtime +7 -delete
+
+### systemd timer 자동 백업
+1. Service 파일 만들기 : sudo nano /etc/systemd/system/mysql-backup.service
+2. Service 타이머 만들기 : sudo nano /etc/systemd/system/mysql-backup.timer
+3. systemd timer는 기본적으로 자신과 같은 이름의 service를 예약된 시간에 시작한다.
+
+### MySQL 장애 및 복구 테스트
+1. MySQL 서비스를 의도적으로 중지
+2. /health → 200 확인
+3. /health/db → 503 확인
+4. systemctl status mysql 확인
+5. 3306 LISTEN 여부 확인
+6. MySQL 서비스 복구
+7. /health/db → 200 정상화 확인
 
 ### 트러블슈팅
    **[이슈] was01 서버에서 dB01 서버로 MYSQL 원격 접속 설정 시 접속 거절 됨**  
