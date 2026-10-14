@@ -5,7 +5,6 @@
 
 ## 아키텍처 
 ![On-Premise 3-Tier Architecture](images/onprem-3tier-architecture.png)
-
 ## 1. WEB 서버
 
 ### 서버 정보
