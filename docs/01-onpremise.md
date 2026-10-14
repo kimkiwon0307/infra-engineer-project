@@ -1,10 +1,11 @@
 # 온프레미스 3티어 구축 
 
 ## 목적 
-온프레미스 환경에서 3티어 아키텍처를 구축해 본다.
+On-Premise 환경에서 3-Tire 아키텍처를 구축 .
 
 ## 아키텍처 
 <img width="500" height="1000" alt="On-Premise 3-Tier Architecture drawio" src="https://github.com/user-attachments/assets/ca4abfda-5dc1-4c15-9132-a4433f30854d" />
+
 
 ## 1. WEB 서버
 
