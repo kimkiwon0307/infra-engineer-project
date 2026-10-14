@@ -1,0 +1,705 @@
+## 2. Network / Security
+
+> **WEB/WAS/DB 서버 간 필요한 통신만 허용하도록 UFW 기반 Host Firewall 정책을 적용하고, SSH 접근 범위를 제한하여 불필요한 접근을 차단했습니다.**
+
+### 네트워크 구성
+
+| 서버 | Hostname | IP | 주요 Port |
+|---|---|---|---:|
+| WEB | `web01` | `192.168.111.141` | `80` |
+| WAS | `was01` | `192.168.111.142` | `8080` |
+| DB | `db01` | `192.168.111.143` | `3306` |
+
+현재 WEB/WAS/DB 서버는 동일한 `192.168.111.0/24` 네트워크에 구성되어 있습니다.
+
+따라서 이번 단계에서는 Subnet이나 VLAN을 분리하는 것이 아니라, 각 서버에 UFW를 적용하여 **Host Firewall 기반 접근 제어**를 구성했습니다.
+
+---
+
+### 접근 제어 정책
+
+서비스 흐름에 필요한 통신만 허용하도록 정책을 설계했습니다.
+
+| Source | Destination | Port | 정책 |
+|---|---|---:|---|
+| Client | WEB01 | 80 | Allow |
+| WEB01 | WAS01 | 8080 | Allow |
+| WAS01 | DB01 | 3306 | Allow |
+| Client | WAS01 | 8080 | Deny |
+| Client | DB01 | 3306 | Deny |
+| WEB01 | DB01 | 3306 | Deny |
+| 관리 PC | WEB/WAS/DB | 22 | Allow |
+
+최종 서비스 요청 흐름:
+
+```text
+Client
+  |
+  | HTTP :80
+  v
+WEB01
+Nginx
+  |
+  | HTTP :8080
+  v
+WAS01
+Spring Boot
+  |
+  | MySQL :3306
+  v
+DB01
+MySQL
+```
+
+---
+
+### UFW 기본 정책
+
+각 서버에서 Incoming 통신은 기본적으로 차단하고, 필요한 통신만 명시적으로 허용하도록 설정했습니다.
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+```
+
+#### 설정 의미
+
+- `default` : 기본 방화벽 정책 설정
+- `deny` : 통신 차단
+- `incoming` : 외부에서 서버로 들어오는 통신
+- `allow outgoing` : 서버에서 외부로 나가는 통신은 기본 허용
+
+> **설정 목적**
+>
+> 모든 Incoming 통신을 기본적으로 차단한 뒤 필요한 Port와 Source만 허용하는 **Default Deny 방식**을 적용했습니다.
+>
+> 이를 통해 새로운 서비스나 Port가 실행되더라도 별도의 허용 규칙이 없다면 외부에 바로 노출되지 않도록 구성했습니다.
+
+---
+
+### WEB01 UFW 설정
+
+WEB 서버는 Client의 HTTP 요청을 받아야 하므로 `80/tcp`를 허용했습니다.
+
+SSH는 관리 PC에서만 접근할 수 있도록 제한했습니다.
+
+```bash
+sudo ufw allow from <관리PC_IP> to any port 22 proto tcp
+sudo ufw allow 80/tcp
+
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+sudo ufw enable
+```
+
+설정 확인:
+
+```bash
+sudo ufw status numbered
+```
+
+구성:
+
+```text
+관리 PC → WEB01 :22
+ALLOW
+
+Client → WEB01 :80
+ALLOW
+
+그 외 Incoming
+DENY
+```
+
+---
+
+### WAS01 UFW 설정
+
+WAS 서버의 Spring Boot 애플리케이션은 `8080` 포트를 사용하지만 Client가 직접 접근하지 않도록 구성했습니다.
+
+WEB01에서 오는 8080 요청만 허용했습니다.
+
+```bash
+sudo ufw allow from <관리PC_IP> to any port 22 proto tcp
+
+sudo ufw allow from 192.168.111.141 to any port 8080 proto tcp
+
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+sudo ufw enable
+```
+
+설정 확인:
+
+```bash
+sudo ufw status numbered
+```
+
+구성:
+
+```text
+관리 PC
+   |
+   | SSH :22
+   v
+WAS01
+
+WEB01
+192.168.111.141
+   |
+   | TCP :8080
+   v
+WAS01
+
+그 외 → WAS01 :8080
+DENY
+```
+
+> `sudo ufw allow 8080/tcp`처럼 모든 Source에 Port를 개방하지 않고 WEB01의 IP를 Source로 지정하여 접근 범위를 제한했습니다.
+
+---
+
+### DB01 UFW 설정
+
+MySQL은 WAS01에서만 접근할 수 있도록 `3306` Port의 Source를 WAS01으로 제한했습니다.
+
+```bash
+sudo ufw allow from <관리PC_IP> to any port 22 proto tcp
+
+sudo ufw allow from 192.168.111.142 to any port 3306 proto tcp
+
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+sudo ufw enable
+```
+
+설정 확인:
+
+```bash
+sudo ufw status numbered
+```
+
+구성:
+
+```text
+관리 PC
+   |
+   | SSH :22
+   v
+DB01
+
+WAS01
+192.168.111.142
+   |
+   | TCP :3306
+   v
+DB01
+
+그 외 → DB01 :3306
+DENY
+```
+
+---
+
+### MySQL 접근 제어 구조
+
+DB 서버에는 UFW뿐만 아니라 MySQL의 `bind-address`와 사용자 Host 제한도 함께 적용되어 있습니다.
+
+각 설정의 역할은 다음과 같습니다.
+
+```text
+bind-address
+→ MySQL이 DB 서버의 어떤 Network Interface에서 LISTEN할지 결정
+
+UFW
+→ 어떤 Source의 네트워크 통신을 서버까지 통과시킬지 결정
+
+MySQL User Host
+→ MySQL까지 도착한 사용자가 로그인할 수 있는지 결정
+```
+
+현재 연결 흐름:
+
+```text
+WAS01
+192.168.111.142
+     |
+     v
+DB01 UFW
+     |
+     v
+MySQL :3306
+     |
+     v
+marble@192.168.111.142
+```
+
+> 네트워크 접근과 DB 인증은 서로 다른 계층의 보안 설정이므로 각각 구분하여 구성했습니다.
+
+---
+
+### SSH 접근 제한
+
+초기 UFW 설정 시 SSH 접속이 차단되는 상황을 방지하기 위해 먼저 다음과 같이 전체 SSH 접근을 허용했습니다.
+
+```bash
+sudo ufw allow 22/tcp
+```
+
+이후 관리 PC의 IP를 확인했습니다.
+
+```bash
+echo $SSH_CLIENT
+```
+
+예:
+
+```text
+192.168.111.100 53124 22
+```
+
+첫 번째 값이 SSH Client의 IP입니다.
+
+```text
+192.168.111.100
+```
+
+관리 PC IP를 확인한 후 관리 PC에서만 SSH가 가능하도록 별도의 규칙을 추가했습니다.
+
+```bash
+sudo ufw allow from <관리PC_IP> to any port 22 proto tcp
+```
+
+새 SSH 세션으로 정상 접속되는 것을 확인한 후 기존 전체 SSH 허용 규칙을 삭제했습니다.
+
+현재 규칙 확인:
+
+```bash
+sudo ufw status numbered
+```
+
+기존 `22/tcp ALLOW Anywhere` 규칙 번호를 확인 후 삭제:
+
+```bash
+sudo ufw delete <RULE_NUMBER>
+```
+
+> **설정 변경 순서**
+>
+> ```text
+> 새로운 허용 규칙 추가
+> ↓
+> 정상 접속 확인
+> ↓
+> 기존 전체 허용 규칙 제거
+> ```
+>
+> 기존 SSH 허용 규칙을 먼저 삭제하면 잘못된 Source IP 설정으로 인해 원격 접속이 끊길 수 있으므로 새로운 정책을 먼저 적용하고 검증한 후 기존 정책을 제거했습니다.
+
+---
+
+### 통신 정책 검증
+
+UFW 적용 후 필요한 통신은 유지되고 불필요한 직접 접근은 차단되는지 확인했습니다.
+
+#### WEB01 → WAS01
+
+WEB01:
+
+```bash
+nc -zv 192.168.111.142 8080
+```
+
+결과:
+
+```text
+SUCCESS
+```
+
+Spring Boot 확인:
+
+```bash
+curl -i http://192.168.111.142:8080/health
+```
+
+결과:
+
+```text
+200 OK
+```
+
+---
+
+#### WAS01 → DB01
+
+WAS01:
+
+```bash
+nc -zv 192.168.111.143 3306
+```
+
+결과:
+
+```text
+SUCCESS
+```
+
+MySQL 로그인:
+
+```bash
+mysql -h 192.168.111.143 -u marble -p
+```
+
+정상 접속을 확인했습니다.
+
+---
+
+#### WEB01 → DB01
+
+WEB01:
+
+```bash
+nc -zv 192.168.111.143 3306
+```
+
+결과:
+
+```text
+FAIL
+```
+
+WEB 서버는 DB 서버와 직접 통신할 필요가 없으므로 정상적인 차단 결과입니다.
+
+---
+
+#### Client → WAS01
+
+Client에서 WAS 서버의 8080 Port로 직접 접근:
+
+```text
+http://192.168.111.142:8080/health
+```
+
+결과:
+
+```text
+접근 실패
+```
+
+Client는 반드시 WEB 서버의 Reverse Proxy를 통해 WAS에 접근하도록 구성했습니다.
+
+---
+
+### 최종 통신 결과
+
+| Source | Destination | Port | 결과 |
+|---|---|---:|---|
+| Client | WEB01 | 80 | 성공 |
+| WEB01 | WAS01 | 8080 | 성공 |
+| WAS01 | DB01 | 3306 | 성공 |
+| Client | WAS01 | 8080 | 차단 |
+| Client | DB01 | 3306 | 차단 |
+| WEB01 | DB01 | 3306 | 차단 |
+
+전체 애플리케이션 요청도 정상 동작하는지 확인했습니다.
+
+```bash
+curl -i http://192.168.111.141/health
+curl -i http://192.168.111.141/health/db
+```
+
+결과:
+
+```text
+/health     → 200 OK
+/health/db  → 200 OK
+```
+
+> 불필요한 직접 접근은 차단하면서도 정상적인 `Client → WEB → WAS → DB` 서비스 흐름은 유지되는 것을 확인했습니다.
+
+---
+
+### 방화벽 장애 테스트
+
+DB01에서 WAS01의 `3306` 접근 허용 규칙을 의도적으로 삭제하여 네트워크 장애 상황을 발생시켰습니다.
+
+#### 1. 현재 UFW 규칙 확인
+
+```bash
+sudo ufw status numbered
+```
+
+WAS01의 3306 허용 규칙 번호를 확인합니다.
+
+#### 2. 규칙 삭제
+
+```bash
+sudo ufw delete <RULE_NUMBER>
+```
+
+이후:
+
+```text
+WAS01 → DB01 :3306
+```
+
+통신이 차단됩니다.
+
+---
+
+### 장애 증상 확인
+
+WAS01에서 애플리케이션 상태 확인:
+
+```bash
+curl -i http://localhost:8080/health
+```
+
+결과:
+
+```text
+200 OK
+```
+
+DB 연결 상태 확인:
+
+```bash
+curl -i http://localhost:8080/health/db
+```
+
+결과:
+
+```text
+503 Service Unavailable
+```
+
+즉:
+
+```text
+Spring Boot 자체는 정상
+DB 연결만 실패
+```
+
+하는 상황을 확인했습니다.
+
+---
+
+### 장애 분석
+
+#### WAS 서비스 확인
+
+```bash
+sudo systemctl status infra-app
+```
+
+결과:
+
+```text
+active (running)
+```
+
+#### WAS 포트 확인
+
+```bash
+sudo ss -lntp | grep :8080
+```
+
+8080 Port가 정상적으로 LISTEN 중임을 확인했습니다.
+
+#### DB 서비스 확인
+
+DB01:
+
+```bash
+sudo systemctl status mysql
+```
+
+결과:
+
+```text
+active (running)
+```
+
+#### DB 포트 확인
+
+```bash
+sudo ss -lntp | grep :3306
+```
+
+3306 Port 역시 정상적으로 LISTEN 중임을 확인했습니다.
+
+#### WAS → DB 네트워크 확인
+
+WAS01:
+
+```bash
+nc -zv 192.168.111.143 3306
+```
+
+결과:
+
+```text
+FAIL
+```
+
+서비스와 Port는 정상인데 원격 연결만 실패하므로 네트워크 및 방화벽 영역으로 장애 범위를 좁혔습니다.
+
+---
+
+### 장애 원인 확인
+
+DB01:
+
+```bash
+sudo ufw status numbered
+```
+
+확인 결과:
+
+```text
+WAS01 → DB01 :3306
+```
+
+허용 규칙이 존재하지 않았습니다.
+
+기본 정책:
+
+```text
+deny incoming
+```
+
+에 의해 WAS01에서 들어오는 MySQL 통신이 차단되고 있었습니다.
+
+---
+
+### 장애 복구
+
+DB01에서 WAS01의 3306 접근을 다시 허용했습니다.
+
+```bash
+sudo ufw allow from 192.168.111.142 to any port 3306 proto tcp
+```
+
+규칙 확인:
+
+```bash
+sudo ufw status numbered
+```
+
+---
+
+### 복구 검증
+
+WAS01:
+
+```bash
+nc -zv 192.168.111.143 3306
+```
+
+결과:
+
+```text
+SUCCESS
+```
+
+DB 헬스체크:
+
+```bash
+curl -i http://localhost:8080/health/db
+```
+
+결과:
+
+```text
+200 OK
+```
+
+WEB 서버를 통한 전체 요청도 확인했습니다.
+
+```bash
+curl -i http://192.168.111.141/health/db
+```
+
+결과:
+
+```text
+200 OK
+```
+
+---
+
+### 장애 대응 흐름
+
+이번 장애를 다음 순서로 분석했습니다.
+
+```text
+애플리케이션 증상 확인
+        ↓
+WAS 서비스 상태 확인
+        ↓
+WAS 8080 Port 확인
+        ↓
+DB 서비스 상태 확인
+        ↓
+DB 3306 Port 확인
+        ↓
+WAS → DB 네트워크 연결 확인
+        ↓
+UFW 정책 확인
+        ↓
+방화벽 규칙 누락 발견
+        ↓
+규칙 복구
+        ↓
+서비스 정상화 검증
+```
+
+> **배운 점**
+>
+> 서비스가 `active (running)` 상태이고 Port가 `LISTEN` 상태이더라도 네트워크 또는 방화벽 정책 때문에 서버 간 통신이 실패할 수 있습니다.
+>
+> 장애가 발생했을 때 처음부터 특정 원인을 단정하기보다  
+> **서비스 → 포트 → 네트워크 → 방화벽 → 애플리케이션 연결 상태**  
+> 순서로 확인하면서 장애 범위를 단계적으로 좁히는 것이 중요합니다.
+
+---
+
+### 2단계 결과
+
+2단계를 통해 다음과 같은 접근 제어 구조를 구성했습니다.
+
+```text
+                    관리 PC
+                SSH :22 허용
+              /       |       \
+             v        v        v
+          WEB01     WAS01     DB01
+            |          |
+          :8080       :3306
+            |          |
+            v          v
+          WAS01 ----> DB01
+```
+
+서비스 트래픽:
+
+```text
+Client
+  |
+  | :80
+  v
+WEB01
+  |
+  | :8080
+  v
+WAS01
+  |
+  | :3306
+  v
+DB01
+```
+
+불필요한 직접 접근은 차단하고 서비스 운영에 필요한 최소한의 통신만 허용하도록 구성했습니다.
