@@ -4,7 +4,7 @@
 온프레미스 환경에서 3티어 아키텍처를 구축해 본다.
 
 ## 아키텍처 
-  ![On-Premise 3-Tier Architecture](/images/01-onprem-architecture.png)
+  ![On-Premise 3-Tier Architecture](docs/images/On-Premise 3-Tier Architecture.drawio.png)
 
 ## 1. WEB 서버
 
